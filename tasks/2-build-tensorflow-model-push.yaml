@@ -74,7 +74,7 @@ spec:
         cd $(params.source-dir)
         git checkout $(params.git-revision)
     - name: train-model
-      image: quay.io/j0hnniewa1ker/kubeflow
+      image: quay.io/j0hnniewa1ker/mnist
       workingDir: $(params.source-dir)
       volumeMounts:
         - mountPath: /var/lib/containers
@@ -82,12 +82,19 @@ spec:
       securityContext:
         privileged: true
       script: |
+        echo Build Conda Environment
+        /opt/conda/bin/conda update -y -n base -c defaults conda
+        /opt/conda/bin/conda env create -f /source/environment.yml
+        /opt/conda/bin/conda clean -afy
+
+        export PATH=$PATH:/opt/conda/envs/mnist/bin
+        /opt/conda/bin/activate mnist
         echo Pre-process
         python preprocessing.py --data_dir=/root/data 
         echo Train
         python train.py --data_dir=/root/data 
-        export MNIST_PATH=$(cat /workspace/kubeflow-mnist/output.txt) && \
-          tar -czvf /var/lib/containers/kubeflow-mnist.tar.gz $MNIST_PATH
+        export MNIST_PATH=$(cat /workspace/mnist/output.txt) && \
+          tar -czvf /var/lib/containers/mnist.tar.gz $MNIST_PATH
     - name: push-artifactory
       image: $(params.BUILDER_IMAGE)
       volumeMounts:
@@ -101,5 +108,5 @@ spec:
       args:
       - -c
       - |
-        echo "Upload kubeflow-mnist.tar.gz to Artifactory"
-        curl -u ${ARTIFACTORY_USER}:${ARTIFACTORY_ENCRYPT} -T /var/lib/containers/kubeflow-mnist.tar.gz "$(ARTIFACTORY_URL)/artifactory/generic-local/kubeflow-mnist.tar.gz"
+        echo "Upload mnist.tar.gz to Artifactory"
+        curl -u ${ARTIFACTORY_USER}:${ARTIFACTORY_ENCRYPT} -T /var/lib/containers/mnist.tar.gz "$(ARTIFACTORY_URL)/artifactory/generic-local/mnist.tar.gz"
