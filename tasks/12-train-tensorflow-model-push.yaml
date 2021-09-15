@@ -1,0 +1,112 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: train-tensorflow-model-push
+  annotations:
+    description: uses the quay.io/ibmtechgarage/tensorflow-model-build image to process and train a model
+    app.openshift.io/description: uses the quay.io/ibmtechgarage/tensorflow-model-build image to process and train a model
+    app.openshift.io/vcs-uri: https://github.com/IBM/ibm-garage-tekton-tasks
+    app.openshift.io/vcs-ref: master
+  labels:
+    version: 0.0.0
+spec:
+  params:
+    - name: git-url
+    - name: git-revision
+      default: master
+    - name: source-dir
+      default: /source
+    - name: image-server
+      default: ""
+    - name: image-namespace
+      default: ""
+    - name: image-repository
+      default: ""
+    - name: image-tag
+      default: ""
+    - name: BUILDER_IMAGE
+      default: quay.io/buildah/stable:v1.15.0
+    - name: DOCKERFILE
+      default: ./Dockerfile
+    - name: CONTEXT
+      default: .
+    - name: TLSVERIFY
+      default: "false"
+    - name: FORMAT
+      default: "docker"
+    - name: STORAGE_DRIVER
+      description: Set buildah storage driver
+      default: overlay
+  volumes:
+    - name: varlibcontainers
+      emptyDir: {}
+    - name: source
+      emptyDir: {}
+  stepTemplate:
+    volumeMounts:
+      - name: source
+        mountPath: $(params.source-dir)
+  steps:
+    - name: git-clone
+      image: quay.io/ibmgaragecloud/alpine-git
+      env:
+        - name: GIT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: git-credentials
+              key: password
+              optional: true
+        - name: GIT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: git-credentials
+              key: username
+              optional: true
+      script: |
+        set +x
+        if [[ -n "${GIT_USERNAME}" ]] && [[ -n "${GIT_PASSWORD}" ]]; then
+            git clone "$(echo $(params.git-url) | awk -F '://' '{print $1}')://${GIT_USERNAME}:${GIT_PASSWORD}@$(echo $(params.git-url) | awk -F '://' '{print $2}')" $(params.source-dir)
+        else
+            set -x
+            git clone $(params.git-url) $(params.source-dir)
+        fi
+        set -x
+        cd $(params.source-dir)
+        git checkout $(params.git-revision)
+    - name: train-model
+      image: quay.io/ibmtechgarage/tensorflow-model-build
+      workingDir: $(params.source-dir)
+      volumeMounts:
+        - mountPath: /var/lib/containers
+          name: varlibcontainers
+      securityContext:
+        privileged: true
+      script: |
+        echo Build Conda Environment
+        /opt/conda/bin/conda update -y -n base -c defaults conda
+        /opt/conda/bin/conda env create -f /source/environment.yml
+        /opt/conda/bin/conda clean -afy
+
+        export PATH=$PATH:/opt/conda/envs/mnist/bin
+        /opt/conda/bin/activate mnist
+        echo Pre-process
+        python preprocessing.py --data_dir=/root/data 
+        echo Train
+        python train.py --data_dir=/root/data 
+        export MNIST_PATH=$(cat /workspace/mnist/output.txt) && \
+          tar -czvf /var/lib/containers/mnist.tar.gz $MNIST_PATH
+    - name: push-artifactory
+      image: $(params.BUILDER_IMAGE)
+      volumeMounts:
+        - mountPath: /var/lib/containers
+          name: varlibcontainers
+      envFrom:
+      - secretRef:
+          name: artifactory-access
+      command:
+      - /bin/sh
+      args:
+      - -c
+      - |
+        echo "Upload mnist.tar.gz to Artifactory"
+        curl -u ${ARTIFACTORY_USER}:${ARTIFACTORY_ENCRYPT} -T /var/lib/containers/mnist.tar.gz "$(ARTIFACTORY_URL)/artifactory/generic-local/mnist.tar.gz"
