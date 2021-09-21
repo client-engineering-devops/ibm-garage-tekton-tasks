@@ -74,7 +74,7 @@ spec:
         cd $(params.source-dir)
         git checkout $(params.git-revision)
     - name: train-model
-      image: quay.io/ibmtechgarage/tensorflow-model-build
+      image: quay.io/ibmtechgarage/tensorflow-model-train
       workingDir: $(params.source-dir)
       volumeMounts:
         - mountPath: /var/lib/containers
@@ -93,8 +93,7 @@ spec:
         python preprocessing.py --data_dir=/root/data 
         echo Train
         python train.py --data_dir=/root/data 
-        export MNIST_PATH=$(cat /workspace/mnist/output.txt) && \
-          tar -czvf /var/lib/containers/mnist.tar.gz $MNIST_PATH
+        tar -czvf /var/lib/containers/mnist.tar.gz -C /workspace mnist 
     - name: push-artifactory
       image: $(params.BUILDER_IMAGE)
       volumeMounts:
